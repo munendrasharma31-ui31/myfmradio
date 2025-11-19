@@ -1,34 +1,63 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, Volume2, Trash2, Plus, Settings, Radio, X, Save, Music, RefreshCw, Lock } from 'lucide-react';
 
-// Note: Real world mein yeh keys environment variables mein honi chahiye.
-// Abhi ke liye yeh "Mock Data" mode mein chalega jab tak aap Firebase setup nahi karte.
-const MOCK_MODE = true; 
+// --- FIREBASE IMPORTS ---
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from "firebase/firestore";
 
-const RadioAdminApp = () => {
+// --- FIREBASE CONFIGURATION (UPDATED WITH YOUR KEYS) ---
+const firebaseConfig = {
+  apiKey: "AIzaSyBLiNpHVKlx7rjvnT0Wm_30YsZEhWms2vE",
+  authDomain: "myfmradio-dc224.firebaseapp.com",
+  projectId: "myfmradio-dc224",
+  storageBucket: "myfmradio-dc224.firebasestorage.app",
+  messagingSenderId: "925135255058",
+  appId: "1:925135255058:web:8bd700fa94ade0568d4acb",
+  measurementId: "G-MX74BBWYL7"
+};
+
+// Initialize Firebase
+// Note: Variable name changed from 'app' to 'firebaseApp' to avoid conflict with React Component 'App'
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+
+// --- MAIN COMPONENT ---
+// Rule: Component ka naam hamesha 'App' hona chahiye
+const App = () => {
   // --- STATE MANAGEMENT ---
-  const [stations, setStations] = useState([
-    { id: '1', name: 'Chill Lofi', url: 'https://stream.zeno.fm/0r0xa792kwzuv', genre: 'Lo-Fi', freq: '98.5' },
-    { id: '2', name: 'Desi Hits', url: 'https://stream.zeno.fm/fn18m792kwzuv', genre: 'Bollywood', freq: '102.0' }
-  ]);
-  
+  const [stations, setStations] = useState([]); // Shuru mein khali list
   const [currentStation, setCurrentStation] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false); // Toggle Admin Mode
+  const [isAdmin, setIsAdmin] = useState(false); 
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPass, setAdminPass] = useState('');
 
-  // Form State for New Station
+  // Form State
   const [newStation, setNewStation] = useState({ name: '', url: '', genre: '', freq: '' });
-
   const audioRef = useRef(null);
 
-  // --- EFFECT: Initialize First Station ---
+  // --- REAL-TIME DATABASE LISTENER (useEffect) ---
   useEffect(() => {
-    if (stations.length > 0 && !currentStation) {
-      setCurrentStation(stations[0]);
-    }
-  }, [stations]);
+    // Database par nazar rakho (Listen karo)
+    const unsubscribe = onSnapshot(collection(db, "stations"), (snapshot) => {
+      const stationList = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      setStations(stationList);
+    }, (error) => {
+      console.error("Snapshot Error:", error);
+      // Agar API key nahi dali hogi to yeh error ayega
+      if (error.code === 'permission-denied' || error.code === 'api-key-not-valid') {
+         console.log("Please check Firebase Config & API Key");
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Default selection
+  useEffect(() => {
+      if (!currentStation && stations.length > 0) {
+          setCurrentStation(stations[0]);
+      }
+  }, [stations, currentStation]);
 
   // --- AUDIO HANDLERS ---
   const togglePlay = () => {
@@ -36,7 +65,10 @@ const RadioAdminApp = () => {
     if (isPlaying) {
       audioRef.current.pause();
     } else {
-      audioRef.current.play().catch(e => alert("Stream error or offline"));
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(error => console.log("Playback error:", error));
+      }
     }
     setIsPlaying(!isPlaying);
   };
@@ -44,19 +76,17 @@ const RadioAdminApp = () => {
   const playStation = (station) => {
     setCurrentStation(station);
     setIsPlaying(true);
-    // Timeout to allow state update before playing
     setTimeout(() => {
         if(audioRef.current) {
             audioRef.current.src = station.url;
-            audioRef.current.play();
+            audioRef.current.play().catch(e => console.log(e));
         }
     }, 100);
   };
 
-  // --- ADMIN FUNCTIONS (MOCK + REAL LOGIC EXPLAINED) ---
-  
+  // --- ADMIN FUNCTIONS ---
   const handleLogin = () => {
-    if (adminPass === 'admin123') { // Simple password
+    if (adminPass === 'admin123') { 
       setIsAdmin(true);
       setShowAdminLogin(false);
     } else {
@@ -64,39 +94,48 @@ const RadioAdminApp = () => {
     }
   };
 
-  const handleAddStation = () => {
+  // 1. Station Add karne ka function (Firebase wala)
+  const handleAddStation = async () => {
     if (!newStation.name || !newStation.url) return alert("Name and URL required");
-
-    const newEntry = { ...newStation, id: Date.now().toString() };
     
-    // AGAR FIREBASE HOTA TOH:
-    // await addDoc(collection(db, "stations"), newEntry);
-    
-    // LOCAL DEMO UPDATE:
-    setStations([...stations, newEntry]);
-    setNewStation({ name: '', url: '', genre: '', freq: '' }); // Reset form
-    alert("Station Added! Users will see this instantly.");
+    try {
+      await addDoc(collection(db, "stations"), {
+        name: newStation.name,
+        url: newStation.url,
+        genre: newStation.genre || 'Unknown',
+        freq: newStation.freq || 'FM'
+      });
+      
+      setNewStation({ name: '', url: '', genre: '', freq: '' }); 
+      alert("Station Added via Cloud!");
+    } catch (error) {
+      console.error("Error adding station: ", error);
+      alert("Error adding station: " + error.message);
+    }
   };
 
-  const handleDelete = (id) => {
+  // 2. Station Delete karne ka function (Firebase wala)
+  const handleDelete = async (id) => {
     if(!window.confirm("Delete this station?")) return;
-
-    // AGAR FIREBASE HOTA TOH:
-    // await deleteDoc(doc(db, "stations", id));
-
-    // LOCAL DEMO UPDATE:
-    setStations(stations.filter(s => s.id !== id));
-    if (currentStation?.id === id) {
+    
+    try {
+      await deleteDoc(doc(db, "stations", id));
+      
+      if (currentStation?.id === id) {
         setIsPlaying(false);
         audioRef.current.pause();
         setCurrentStation(null);
+      }
+    } catch (error) {
+      console.error("Error deleting: ", error);
+      alert("Error deleting station");
     }
   };
 
   // --- RENDER ---
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
-      <audio ref={audioRef} />
+      <audio ref={audioRef} onError={(e) => console.log("Audio Error", e)} />
 
       {/* HEADER */}
       <div className="flex justify-between items-center p-4 bg-gray-800 shadow-md">
@@ -104,10 +143,10 @@ const RadioAdminApp = () => {
           <div className="bg-pink-600 p-2 rounded-lg">
             <Radio size={20} />
           </div>
-          <h1 className="font-bold text-xl tracking-wider">CLOUD<span className="text-pink-500">FM</span></h1>
+          {/* NAME CHANGED HERE */}
+          <h1 className="font-bold text-xl tracking-wider">MY<span className="text-pink-500">RADIOAPP</span></h1>
         </div>
         
-        {/* Secret Admin Button */}
         <button 
           onClick={() => isAdmin ? setIsAdmin(false) : setShowAdminLogin(true)}
           className={`p-2 rounded-full transition ${isAdmin ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}
@@ -116,10 +155,10 @@ const RadioAdminApp = () => {
         </button>
       </div>
 
-      {/* MAIN CONTENT AREA */}
+      {/* MAIN CONTENT */}
       <div className="flex-1 overflow-y-auto relative">
         
-        {/* --- ADMIN LOGIN MODAL --- */}
+        {/* Login Modal */}
         {showAdminLogin && (
           <div className="absolute inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <div className="bg-gray-800 p-6 rounded-2xl w-full max-w-sm border border-gray-700">
@@ -139,99 +178,69 @@ const RadioAdminApp = () => {
           </div>
         )}
 
-        {/* --- ADMIN PANEL VIEW --- */}
+        {/* Admin Panel */}
         {isAdmin ? (
           <div className="p-4 space-y-6">
             <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
               <h2 className="text-lg font-bold mb-4 text-pink-400 flex items-center gap-2">
-                <Plus size={18} /> Add New Station
+                <Plus size={18} /> Add New Station (Cloud DB)
               </h2>
               <div className="space-y-3">
-                <input 
-                  className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600" 
-                  placeholder="Station Name (e.g. Radio Mirchi)" 
-                  value={newStation.name} onChange={e => setNewStation({...newStation, name: e.target.value})}
-                />
-                <input 
-                  className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600" 
-                  placeholder="Stream URL (https://...mp3)" 
-                  value={newStation.url} onChange={e => setNewStation({...newStation, url: e.target.value})}
-                />
+                <input className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Station Name" value={newStation.name} onChange={e => setNewStation({...newStation, name: e.target.value})}/>
+                <input className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Stream URL" value={newStation.url} onChange={e => setNewStation({...newStation, url: e.target.value})}/>
                 <div className="flex gap-2">
-                  <input 
-                    className="flex-1 p-3 bg-gray-900 rounded-lg border border-gray-600" 
-                    placeholder="Frequency (98.3)" 
-                    value={newStation.freq} onChange={e => setNewStation({...newStation, freq: e.target.value})}
-                  />
-                  <input 
-                    className="flex-1 p-3 bg-gray-900 rounded-lg border border-gray-600" 
-                    placeholder="Genre (Pop)" 
-                    value={newStation.genre} onChange={e => setNewStation({...newStation, genre: e.target.value})}
-                  />
+                  <input className="flex-1 p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Freq (98.3)" value={newStation.freq} onChange={e => setNewStation({...newStation, freq: e.target.value})}/>
+                  <input className="flex-1 p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Genre" value={newStation.genre} onChange={e => setNewStation({...newStation, genre: e.target.value})}/>
                 </div>
-                <button onClick={handleAddStation} className="w-full py-3 bg-green-600 hover:bg-green-500 rounded-lg font-bold flex justify-center items-center gap-2">
-                  <Save size={18} /> Save Station
-                </button>
+                <button onClick={handleAddStation} className="w-full py-3 bg-green-600 hover:bg-green-500 rounded-lg font-bold flex justify-center items-center gap-2"><Save size={18} /> Save to Cloud</button>
               </div>
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-sm text-gray-400 uppercase tracking-wider">Manage Existing Stations</h3>
+              <h3 className="text-sm text-gray-400 uppercase tracking-wider">Cloud Database Stations</h3>
               {stations.map(station => (
                 <div key={station.id} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg border border-gray-700">
                   <div>
                     <div className="font-bold">{station.name}</div>
                     <div className="text-xs text-gray-400 truncate max-w-[200px]">{station.url}</div>
                   </div>
-                  <button onClick={() => handleDelete(station.id)} className="p-2 bg-red-500/20 text-red-500 rounded-lg hover:bg-red-500 hover:text-white">
-                    <Trash2 size={18} />
-                  </button>
+                  <button onClick={() => handleDelete(station.id)} className="p-2 bg-red-500/20 text-red-500 rounded-lg hover:bg-red-500 hover:text-white"><Trash2 size={18} /></button>
                 </div>
               ))}
             </div>
           </div>
         ) : (
-          /* --- NORMAL USER VIEW (STATION LIST) --- */
+          /* User List */
           <div className="p-4 space-y-3 pb-32">
-            {stations.map((station) => (
-              <div 
-                key={station.id}
-                onClick={() => playStation(station)}
-                className={`flex items-center p-4 rounded-xl cursor-pointer transition-all border ${
-                  currentStation?.id === station.id 
-                    ? 'bg-pink-900/20 border-pink-500/50' 
-                    : 'bg-gray-800 border-transparent hover:bg-gray-750'
-                }`}
-              >
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center mr-4 ${
-                  currentStation?.id === station.id ? 'bg-pink-500 text-white' : 'bg-gray-700 text-gray-400'
-                }`}>
-                  {currentStation?.id === station.id && isPlaying ? <Music size={20} className="animate-pulse"/> : <Radio size={20}/>}
-                </div>
-                <div className="flex-1">
-                  <h3 className={`font-bold ${currentStation?.id === station.id ? 'text-pink-400' : 'text-white'}`}>
-                    {station.name}
-                  </h3>
-                  <p className="text-xs text-gray-400">{station.freq} • {station.genre}</p>
-                </div>
-                {currentStation?.id === station.id && (
-                   <div className="text-pink-500 text-xs font-bold tracking-widest">PLAYING</div>
-                )}
+            {stations.length === 0 ? (
+              <div className="text-center text-gray-500 mt-10">
+                  <RefreshCw size={40} className="mx-auto mb-2 opacity-50"/>
+                  <p>No stations in Cloud Database.</p>
+                  <p className="text-sm">Login as Admin to add.</p>
               </div>
-            ))}
-            
-            {stations.length === 0 && (
-                <div className="text-center text-gray-500 mt-10">
-                    <RefreshCw size={40} className="mx-auto mb-2 opacity-50"/>
-                    <p>No stations found.</p>
-                    <p className="text-sm">Login as Admin to add one.</p>
+            ) : (
+              stations.map((station) => (
+                <div 
+                  key={station.id}
+                  onClick={() => playStation(station)}
+                  className={`flex items-center p-4 rounded-xl cursor-pointer transition-all border ${currentStation?.id === station.id ? 'bg-pink-900/20 border-pink-500/50' : 'bg-gray-800 border-transparent hover:bg-gray-750'}`}
+                >
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center mr-4 ${currentStation?.id === station.id ? 'bg-pink-500 text-white' : 'bg-gray-700 text-gray-400'}`}>
+                    {currentStation?.id === station.id && isPlaying ? <Music size={20} className="animate-pulse"/> : <Radio size={20}/>}
+                  </div>
+                  <div className="flex-1">
+                    <h3 className={`font-bold ${currentStation?.id === station.id ? 'text-pink-400' : 'text-white'}`}>{station.name}</h3>
+                    <p className="text-xs text-gray-400">{station.freq} • {station.genre}</p>
+                  </div>
+                  {currentStation?.id === station.id && <div className="text-pink-500 text-xs font-bold tracking-widest">PLAYING</div>}
                 </div>
+              ))
             )}
           </div>
         )}
       </div>
 
-      {/* PLAYER FOOTER (Fixed Bottom) */}
+      {/* Footer Player */}
       {!isAdmin && currentStation && (
         <div className="bg-gray-800 border-t border-gray-700 p-4 pb-6 shadow-2xl z-20">
             <div className="flex items-center justify-between max-w-md mx-auto">
@@ -239,11 +248,7 @@ const RadioAdminApp = () => {
                     <span className="text-pink-400 text-xs font-bold tracking-wider">NOW PLAYING</span>
                     <span className="font-bold text-lg">{currentStation.name}</span>
                 </div>
-                
-                <button 
-                    onClick={togglePlay}
-                    className="w-14 h-14 rounded-full bg-pink-600 hover:bg-pink-500 flex items-center justify-center shadow-lg shadow-pink-600/30 transition transform active:scale-95"
-                >
+                <button onClick={togglePlay} className="w-14 h-14 rounded-full bg-pink-600 hover:bg-pink-500 flex items-center justify-center shadow-lg shadow-pink-600/30 transition transform active:scale-95">
                     {isPlaying ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" className="ml-1"/>}
                 </button>
             </div>
@@ -253,4 +258,4 @@ const RadioAdminApp = () => {
   );
 };
 
-export default RadioAdminApp;
+export default App;
