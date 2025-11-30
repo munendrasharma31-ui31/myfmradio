@@ -1,261 +1,423 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, Volume2, Trash2, Plus, Settings, Radio, X, Save, Music, RefreshCw, Lock } from 'lucide-react';
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>MyRadio - Firebase Managed (Hidden Admin)</title>
+  <style>
+    :root { --bg:#071124; --card:#0b1220; --muted:#9aa6bf; --accent:#db2777; }
+    body { margin:0; font-family:Inter, system-ui, -apple-system, Roboto, "Segoe UI", sans-serif; background:var(--bg); color:#fff; }
+    .app { max-width:1000px; margin:18px auto; padding:16px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
+    .brand { display:flex; gap:12px; align-items:center; }
+    .logo { width:48px;height:48px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800; color:#fff; cursor:pointer; user-select:none; }
+    .controls { display:flex; gap:8px; align-items:center; }
+    .input { padding:10px 12px; border-radius:8px; border:1px solid #172235; background:#071124; color:#fff; outline:none; }
+    .btn { padding:8px 10px; border-radius:8px; border:none; cursor:pointer; background:#0b1220; color:#fff; }
+    .btn.primary { background:var(--accent); color:#fff; font-weight:700; }
+    .grid { display:grid; grid-template-columns: 1fr 320px; gap:16px; align-items:start; }
+    .panel { background:var(--card); border:1px solid #122033; padding:14px; border-radius:12px; }
+    .station { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px; border-radius:10px; border:1px solid transparent; margin-bottom:8px; cursor:pointer; }
+    .station:hover { border-color:#17283a; background:rgba(255,255,255,0.02); }
+    .meta { flex:1; min-width:0; }
+    .name { font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .sub { color:var(--muted); font-size:13px; margin-top:4px; }
+    .fav { font-size:18px; user-select:none; cursor:pointer; }
+    .player { position:fixed; left:50%; transform:translateX(-50%); bottom:16px; background:#071124; border:1px solid #122033; padding:12px 16px; border-radius:12px; display:flex; gap:12px; align-items:center; z-index:1000; }
+    .hidden { display:none; }
+    .admin-form { display:flex; flex-direction:column; gap:8px; }
+    label { font-size:13px; color:var(--muted); }
+    .small { font-size:13px; color:var(--muted); }
+    .danger { background:#7f1d1d; color:#fff; }
+    .hint { font-size:12px; color:#9aa6bf; margin-top:8px; }
 
-// --- FIREBASE IMPORTS ---
-import { initializeApp } from "firebase/app";
-import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from "firebase/firestore";
+    @media (max-width:920px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div id="brandLogo" class="logo" title="MyRadio">FM</div>
+        <div>
+          <div style="font-weight:800">MyRadio</div>
+          <div class="small">Hindi Music Anytime</div>
+        </div>
+      </div>
 
-// --- FIREBASE CONFIGURATION (UPDATED WITH YOUR KEYS) ---
-const firebaseConfig = {
-  apiKey: "AIzaSyBLiNpHVKlx7rjvnT0Wm_30YsZEhWms2vE",
-  authDomain: "myfmradio-dc224.firebaseapp.com",
-  projectId: "myfmradio-dc224",
-  storageBucket: "myfmradio-dc224.firebasestorage.app",
-  messagingSenderId: "925135255058",
-  appId: "1:925135255058:web:8bd700fa94ade0568d4acb",
-  measurementId: "G-MX74BBWYL7"
-};
+      <!-- kept header minimal (search moved inside stations panel) -->
+      <div class="controls">
+        <!-- optional space for future header controls -->
+      </div>
+    </header>
 
-// Initialize Firebase
-// Note: Variable name changed from 'app' to 'firebaseApp' to avoid conflict with React Component 'App'
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+    <div class="grid">
+      <!-- LEFT: stations list -->
+      <div>
+        <div class="panel">
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="font-weight:700">Stations</div>
+              <div class="small" id="stationsCount">0</div>
+            </div>
 
-// --- MAIN COMPONENT ---
-// Rule: Component ka naam hamesha 'App' hona chahiye
-const App = () => {
-  // --- STATE MANAGEMENT ---
-  const [stations, setStations] = useState([]); // Shuru mein khali list
-  const [currentStation, setCurrentStation] = useState(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false); 
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-  const [adminPass, setAdminPass] = useState('');
+            <!-- SEARCH + FAVORITES moved here (above list) -->
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input id="search" class="input" placeholder="Search stations (name / genre / freq)" style="flex:1"/>
+              <button id="favFilter" class="btn">Show Favorites</button>
+            </div>
+          </div>
 
-  // Form State
-  const [newStation, setNewStation] = useState({ name: '', url: '', genre: '', freq: '' });
-  const audioRef = useRef(null);
+          <div id="list"></div>
 
-  // --- REAL-TIME DATABASE LISTENER (useEffect) ---
-  useEffect(() => {
-    // Database par nazar rakho (Listen karo)
-    const unsubscribe = onSnapshot(collection(db, "stations"), (snapshot) => {
-      const stationList = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
-      setStations(stationList);
-    }, (error) => {
-      console.error("Snapshot Error:", error);
-      // Agar API key nahi dali hogi to yeh error ayega
-      if (error.code === 'permission-denied' || error.code === 'api-key-not-valid') {
-         console.log("Please check Firebase Config & API Key");
+          <div id="noStations" class="small hidden" style="padding:12px;color:var(--muted)">No stations found in Firestore.</div>
+        </div>
+      </div>
+
+      <!-- RIGHT column wrapper (completely hidden until admin reveal) -->
+      <div id="adminColumn" class="hidden">
+        <div class="panel" id="adminPanel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="font-weight:700">Admin</div>
+            <div class="small">Add / Remove stations</div>
+          </div>
+
+          <!-- login hidden initially -->
+          <div id="adminLoginBox" class="hidden">
+            <div class="small">Login required to make changes.</div>
+            <div style="margin-top:8px; display:flex; gap:8px;">
+              <input id="adminPass" class="input" placeholder="Admin password" type="password"/>
+              <button id="loginNow" class="btn primary">Login</button>
+            </div>
+          </div>
+
+          <div id="adminControls" class="hidden">
+            <div class="admin-form" style="margin-top:10px;">
+              <label>Station Name</label>
+              <input id="stName" class="input" placeholder="e.g. Mumbai Beats"/>
+              <label>Stream URL</label>
+              <input id="stURL" class="input" placeholder="https://stream.example/"/>
+              <label>Frequency</label>
+              <input id="stFreq" class="input" placeholder="e.g. 98.3"/>
+              <label>Genre</label>
+              <input id="stGenre" class="input" placeholder="e.g. Bollywood"/>
+              <div style="display:flex; gap:8px; margin-top:6px;">
+                <button id="addStation" class="btn primary">Add Station</button>
+                <button id="logout" class="btn danger">Logout</button>
+              </div>
+              <div class="small hint">Admin password is required to add/delete. For stronger security, integrate Firebase Auth later.</div>
+            </div>
+          </div>
+
+          <div id="adminRevealedHint" class="small hidden" style="margin-top:8px;color:var(--muted)">
+            Admin panel revealed. Enter password to login.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- bottom audio player -->
+  <div id="player" class="player hidden" aria-live="polite">
+    <div>
+      <div id="nowName" style="font-weight:700"></div>
+      <div id="nowSub" class="small"></div>
+    </div>
+    <button id="playPause" class="btn">Play</button>
+    <button id="stopBtn" class="btn">Stop</button>
+  </div>
+
+  <audio id="audio" crossorigin="anonymous"></audio>
+
+  <!-- Firebase compat SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+
+  <script>
+  /******************************
+   * CONFIG - change if needed
+   ******************************/
+  const firebaseConfig = {
+    apiKey: "AIzaSyBLiNpHVKlx7rjvnT0Wm_30YsZEhWms2vE",
+    authDomain: "myfmradio-dc224.firebaseapp.com",
+    projectId: "myfmradio-dc224",
+    storageBucket: "myfmradio-dc224.firebasestorage.app",
+    messagingSenderId: "925135255058",
+    appId: "1:925135255058:web:8bd700fa94ade0568d4acb",
+    measurementId: "G-MX74BBWYL7"
+  };
+
+  const SECRET_TOKEN = 'f2a9b8c4-3d7e-4a9b-8f2d-SECRET-ADMIN-2025';
+  const ADMIN_PASSWORD = 'admin123';
+  /*****************************/
+
+  try { firebase.initializeApp(firebaseConfig); } catch(e){ console.error("Firebase init error:", e); }
+  const db = firebase.firestore();
+
+  // DOM refs
+  const listEl = document.getElementById('list');
+  const searchEl = document.getElementById('search');
+  const favFilterBtn = document.getElementById('favFilter');
+  const stationsCountEl = document.getElementById('stationsCount');
+  const noStationsEl = document.getElementById('noStations');
+
+  const brandLogo = document.getElementById('brandLogo');
+  const adminColumn = document.getElementById('adminColumn');
+  const adminLoginBox = document.getElementById('adminLoginBox');
+  const adminControls = document.getElementById('adminControls');
+  const adminRevealedHint = document.getElementById('adminRevealedHint');
+  const loginNowBtn = document.getElementById('loginNow');
+  const logoutBtn = document.getElementById('logout');
+  const adminPassEl = document.getElementById('adminPass');
+
+  const stName = document.getElementById('stName');
+  const stURL = document.getElementById('stURL');
+  const stFreq = document.getElementById('stFreq');
+  const stGenre = document.getElementById('stGenre');
+  const addStationBtn = document.getElementById('addStation');
+
+  const audio = document.getElementById('audio');
+  const player = document.getElementById('player');
+  const nowName = document.getElementById('nowName');
+  const nowSub = document.getElementById('nowSub');
+  const playPause = document.getElementById('playPause');
+  const stopBtn = document.getElementById('stopBtn');
+
+  // state
+  let stations = [];
+  let favorites = JSON.parse(localStorage.getItem('mr_favs') || '[]');
+  let showOnlyFav = false;
+  let isAdmin = false;
+  let currentStation = null;
+  let playing = false;
+
+  function saveFavs(){ localStorage.setItem('mr_favs', JSON.stringify(favorites)); }
+
+  // Firestore realtime listener
+  function startListener() {
+    console.log("Starting Firestore listener for 'stations'...");
+    db.collection('stations').orderBy('name').onSnapshot(snapshot => {
+      stations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      renderList();
+      stationsCountEl.textContent = stations.length;
+      noStationsEl.classList.toggle('hidden', stations.length > 0);
+      console.log("Loaded stations:", stations.length);
+    }, err => {
+      console.error("Firestore snapshot error:", err);
+      noStationsEl.textContent = 'Error loading stations. Check console.';
+      noStationsEl.classList.remove('hidden');
+    });
+  }
+
+  // Render station list
+  function renderList(){
+    const q = (searchEl.value||'').trim().toLowerCase();
+    const filtered = stations.filter(s => {
+      if (showOnlyFav && !favorites.includes(s.id)) return false;
+      if (!q) return true;
+      return (s.name||'').toLowerCase().includes(q) ||
+             (s.genre||'').toLowerCase().includes(q) ||
+             (String(s.freq||'')).toLowerCase().includes(q);
+    });
+    listEl.innerHTML = '';
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div class="small" style="padding:10px;color:var(--muted)">No stations match.</div>';
+      return;
+    }
+    filtered.forEach(s => {
+      const card = document.createElement('div');
+      card.className = 'station';
+      card.dataset.id = s.id;
+      card.innerHTML = `
+        <div style="display:flex;gap:12px;align-items:center;">
+          <div style="width:48px;height:48px;border-radius:8px;background:#122436;display:flex;align-items:center;justify-content:center;font-weight:700">${escapeHtml((s.name||'')[0]||'?')}</div>
+          <div class="meta">
+            <div class="name">${escapeHtml(s.name)}</div>
+            <div class="sub">${escapeHtml(s.freq || '')} • ${escapeHtml(s.genre || '')}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div class="fav" data-id="${s.id}" title="Toggle favorite">${ favorites.includes(s.id) ? '★' : '☆' }</div>
+          ${isAdmin ? `<button class="btn danger delBtn" data-id="${s.id}">Delete</button>` : ''}
+        </div>
+      `;
+      // favorite click
+      const favEl = card.querySelector('.fav');
+      favEl.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const id = favEl.dataset.id;
+        if (favorites.includes(id)) favorites = favorites.filter(x=>x!==id); else favorites.push(id);
+        saveFavs(); renderList();
+      });
+
+      // delete if admin
+      if (isAdmin) {
+        const del = card.querySelector('.delBtn');
+        if (del) {
+          del.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const id = del.dataset.id;
+            if (!confirm('Delete this station?')) return;
+            db.collection('stations').doc(id).delete().then(() => {
+              console.log('Deleted', id);
+            }).catch(err => {
+              console.error('Delete error', err);
+              alert('Could not delete: ' + (err.message||err));
+            });
+          });
+        }
+      }
+
+      // clicking whole card plays
+      card.addEventListener('click', () => playStationById(s.id));
+      listEl.appendChild(card);
+    });
+  }
+
+  function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+  // Play functions
+  function playStationById(id){
+    const s = stations.find(x=>x.id===id);
+    if (!s) { alert('Station not found'); return; }
+    currentStation = s;
+    nowName.textContent = s.name;
+    nowSub.textContent = (s.freq||'') + ' • ' + (s.genre||'');
+    audio.src = s.url;
+    // scroll original card into view gently
+    const el = listEl.querySelector(`.station[data-id="${s.id}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    audio.play().then(()=> {
+      playing = true;
+      playPause.textContent = 'Pause';
+      player.classList.remove('hidden');
+    }).catch(err => {
+      console.warn('Play failed (CORS or invalid URL likely):', err);
+      playing = false;
+      playPause.textContent = 'Play';
+      player.classList.remove('hidden');
+      alert('Stream could not be played in this browser (CORS/invalid URL). UI still works and stations managed in Firestore.');
+    });
+  }
+
+  playPause.addEventListener('click', () => {
+    if (!currentStation) return;
+    if (playing) { audio.pause(); playing=false; playPause.textContent='Play'; }
+    else { audio.play().then(()=>{ playing=true; playPause.textContent='Pause'; }).catch(err=>{ alert('Play failed'); console.error(err); }); }
+  });
+  stopBtn.addEventListener('click', ()=>{ audio.pause(); audio.src=''; playing=false; currentStation=null; player.classList.add('hidden'); });
+
+  // Add station (admin)
+  addStationBtn.addEventListener('click', () => {
+    if (!isAdmin) return alert('Not logged in as admin');
+    const name = (stName.value||'').trim();
+    const url = (stURL.value||'').trim();
+    if (!name || !url) return alert('Name and Stream URL required');
+    const freq = stFreq.value || '';
+    const genre = stGenre.value || '';
+    db.collection('stations').add({ name, url, freq, genre }).then(() => {
+      stName.value = stURL.value = stFreq.value = stGenre.value = '';
+      alert('Station added to Firestore');
+    }).catch(err => {
+      console.error('Add station error:', err);
+      alert('Could not add station: ' + (err.message||err));
+    });
+  });
+
+  // Admin login (client-side simple)
+  loginNowBtn.addEventListener('click', () => {
+    const pass = adminPassEl.value || '';
+    if (pass === ADMIN_PASSWORD) {
+      isAdmin = true;
+      adminLoginBox.classList.add('hidden');
+      adminControls.classList.remove('hidden');
+      adminRevealedHint.classList.remove('hidden');
+      adminRevealedHint.textContent = 'Admin logged in. You can add/delete stations.';
+      renderList();
+    } else {
+      alert('Wrong password');
+    }
+  });
+  logoutBtn.addEventListener('click', () => {
+    isAdmin = false;
+    adminLoginBox.classList.remove('hidden');
+    adminControls.classList.add('hidden');
+    adminPassEl.value = '';
+    adminRevealedHint.classList.add('hidden');
+    renderList();
+  });
+
+  // Search & favorites
+  searchEl.addEventListener('input', renderList);
+  favFilterBtn.addEventListener('click', () => {
+    showOnlyFav = !showOnlyFav;
+    favFilterBtn.textContent = showOnlyFav ? 'Show All' : 'Show Favorites';
+    renderList();
+  });
+
+  window.addEventListener('beforeunload', saveFavs);
+  startListener();
+
+  /***********************
+   * Hidden Admin Access
+   ***********************/
+  function revealAdminUI(triggerSource) {
+    console.log('Admin reveal triggered by:', triggerSource);
+    if (adminColumn.classList.contains('hidden')) {
+      adminColumn.classList.remove('hidden');
+    }
+    if (adminLoginBox.classList.contains('hidden')) {
+      adminLoginBox.classList.remove('hidden');
+      adminRevealedHint.classList.remove('hidden');
+      adminRevealedHint.textContent = 'Admin login revealed by: ' + triggerSource;
+      setTimeout(() => adminPassEl.focus(), 150);
+    }
+  }
+
+  (function checkUrlForAdminKey() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get('adminkey');
+      if (key && key === SECRET_TOKEN) {
+        revealAdminUI('url-token');
+        history.replaceState(null, '', window.location.pathname);
+      }
+    } catch (e) { /* ignore */ }
+  })();
+
+  (function setupLogoTriggers() {
+    if (!brandLogo) return;
+    let clickCount = 0;
+    let clickTimer = null;
+    const REQUIRED_CLICKS = 7;
+    const CLICK_WINDOW_MS = 2000;
+    brandLogo.addEventListener('click', (e) => {
+      clickCount++;
+      if (clickTimer) clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => { clickCount = 0; clickTimer = null; }, CLICK_WINDOW_MS);
+      if (clickCount >= REQUIRED_CLICKS) {
+        clickCount = 0;
+        revealAdminUI('logo-multi-click');
       }
     });
-    return () => unsubscribe();
-  }, []);
+    let pressTimer = null;
+    const LONG_PRESS_MS = 2200;
+    const cancelPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+    brandLogo.addEventListener('mousedown', (e) => {
+      pressTimer = setTimeout(() => {
+        revealAdminUI('logo-long-press');
+        pressTimer = null;
+      }, LONG_PRESS_MS);
+    });
+    ['mouseup','mouseleave','mouseout','touchend','touchcancel'].forEach(evt => {
+      brandLogo.addEventListener(evt, cancelPress);
+    });
+  })();
 
-  // Default selection
-  useEffect(() => {
-      if (!currentStation && stations.length > 0) {
-          setCurrentStation(stations[0]);
-      }
-  }, [stations, currentStation]);
-
-  // --- AUDIO HANDLERS ---
-  const togglePlay = () => {
-    if (!currentStation) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      const playPromise = audioRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(error => console.log("Playback error:", error));
-      }
-    }
-    setIsPlaying(!isPlaying);
-  };
-
-  const playStation = (station) => {
-    setCurrentStation(station);
-    setIsPlaying(true);
-    setTimeout(() => {
-        if(audioRef.current) {
-            audioRef.current.src = station.url;
-            audioRef.current.play().catch(e => console.log(e));
-        }
-    }, 100);
-  };
-
-  // --- ADMIN FUNCTIONS ---
-  const handleLogin = () => {
-    if (adminPass === 'admin123') { 
-      setIsAdmin(true);
-      setShowAdminLogin(false);
-    } else {
-      alert("Wrong Password!");
-    }
-  };
-
-  // 1. Station Add karne ka function (Firebase wala)
-  const handleAddStation = async () => {
-    if (!newStation.name || !newStation.url) return alert("Name and URL required");
-    
-    try {
-      await addDoc(collection(db, "stations"), {
-        name: newStation.name,
-        url: newStation.url,
-        genre: newStation.genre || 'Unknown',
-        freq: newStation.freq || 'FM'
-      });
-      
-      setNewStation({ name: '', url: '', genre: '', freq: '' }); 
-      alert("Station Added via Cloud!");
-    } catch (error) {
-      console.error("Error adding station: ", error);
-      alert("Error adding station: " + error.message);
-    }
-  };
-
-  // 2. Station Delete karne ka function (Firebase wala)
-  const handleDelete = async (id) => {
-    if(!window.confirm("Delete this station?")) return;
-    
-    try {
-      await deleteDoc(doc(db, "stations", id));
-      
-      if (currentStation?.id === id) {
-        setIsPlaying(false);
-        audioRef.current.pause();
-        setCurrentStation(null);
-      }
-    } catch (error) {
-      console.error("Error deleting: ", error);
-      alert("Error deleting station");
-    }
-  };
-
-  // --- RENDER ---
-  return (
-    <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
-      <audio ref={audioRef} onError={(e) => console.log("Audio Error", e)} />
-
-      {/* HEADER */}
-      <div className="flex justify-between items-center p-4 bg-gray-800 shadow-md">
-        <div className="flex items-center gap-2">
-          <div className="bg-pink-600 p-2 rounded-lg">
-            <Radio size={20} />
-          </div>
-          {/* NAME CHANGED HERE */}
-          <h1 className="font-bold text-xl tracking-wider">MY<span className="text-pink-500">RADIOAPP</span></h1>
-        </div>
-        
-        <button 
-          onClick={() => isAdmin ? setIsAdmin(false) : setShowAdminLogin(true)}
-          className={`p-2 rounded-full transition ${isAdmin ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}
-        >
-          {isAdmin ? <X size={20} /> : <Settings size={20} />}
-        </button>
-      </div>
-
-      {/* MAIN CONTENT */}
-      <div className="flex-1 overflow-y-auto relative">
-        
-        {/* Login Modal */}
-        {showAdminLogin && (
-          <div className="absolute inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-            <div className="bg-gray-800 p-6 rounded-2xl w-full max-w-sm border border-gray-700">
-              <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Lock size={18} className="text-pink-500"/> Admin Access</h3>
-              <input 
-                type="password" 
-                placeholder="Enter Password (admin123)"
-                className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600 mb-4 focus:border-pink-500 outline-none"
-                value={adminPass}
-                onChange={(e) => setAdminPass(e.target.value)}
-              />
-              <div className="flex gap-2">
-                <button onClick={() => setShowAdminLogin(false)} className="flex-1 py-2 bg-gray-700 rounded-lg">Cancel</button>
-                <button onClick={handleLogin} className="flex-1 py-2 bg-pink-600 rounded-lg font-semibold">Login</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Admin Panel */}
-        {isAdmin ? (
-          <div className="p-4 space-y-6">
-            <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
-              <h2 className="text-lg font-bold mb-4 text-pink-400 flex items-center gap-2">
-                <Plus size={18} /> Add New Station (Cloud DB)
-              </h2>
-              <div className="space-y-3">
-                <input className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Station Name" value={newStation.name} onChange={e => setNewStation({...newStation, name: e.target.value})}/>
-                <input className="w-full p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Stream URL" value={newStation.url} onChange={e => setNewStation({...newStation, url: e.target.value})}/>
-                <div className="flex gap-2">
-                  <input className="flex-1 p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Freq (98.3)" value={newStation.freq} onChange={e => setNewStation({...newStation, freq: e.target.value})}/>
-                  <input className="flex-1 p-3 bg-gray-900 rounded-lg border border-gray-600" placeholder="Genre" value={newStation.genre} onChange={e => setNewStation({...newStation, genre: e.target.value})}/>
-                </div>
-                <button onClick={handleAddStation} className="w-full py-3 bg-green-600 hover:bg-green-500 rounded-lg font-bold flex justify-center items-center gap-2"><Save size={18} /> Save to Cloud</button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <h3 className="text-sm text-gray-400 uppercase tracking-wider">Cloud Database Stations</h3>
-              {stations.map(station => (
-                <div key={station.id} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg border border-gray-700">
-                  <div>
-                    <div className="font-bold">{station.name}</div>
-                    <div className="text-xs text-gray-400 truncate max-w-[200px]">{station.url}</div>
-                  </div>
-                  <button onClick={() => handleDelete(station.id)} className="p-2 bg-red-500/20 text-red-500 rounded-lg hover:bg-red-500 hover:text-white"><Trash2 size={18} /></button>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          /* User List */
-          <div className="p-4 space-y-3 pb-32">
-            {stations.length === 0 ? (
-              <div className="text-center text-gray-500 mt-10">
-                  <RefreshCw size={40} className="mx-auto mb-2 opacity-50"/>
-                  <p>No stations in Cloud Database.</p>
-                  <p className="text-sm">Login as Admin to add.</p>
-              </div>
-            ) : (
-              stations.map((station) => (
-                <div 
-                  key={station.id}
-                  onClick={() => playStation(station)}
-                  className={`flex items-center p-4 rounded-xl cursor-pointer transition-all border ${currentStation?.id === station.id ? 'bg-pink-900/20 border-pink-500/50' : 'bg-gray-800 border-transparent hover:bg-gray-750'}`}
-                >
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center mr-4 ${currentStation?.id === station.id ? 'bg-pink-500 text-white' : 'bg-gray-700 text-gray-400'}`}>
-                    {currentStation?.id === station.id && isPlaying ? <Music size={20} className="animate-pulse"/> : <Radio size={20}/>}
-                  </div>
-                  <div className="flex-1">
-                    <h3 className={`font-bold ${currentStation?.id === station.id ? 'text-pink-400' : 'text-white'}`}>{station.name}</h3>
-                    <p className="text-xs text-gray-400">{station.freq} • {station.genre}</p>
-                  </div>
-                  {currentStation?.id === station.id && <div className="text-pink-500 text-xs font-bold tracking-widest">PLAYING</div>}
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Footer Player */}
-      {!isAdmin && currentStation && (
-        <div className="bg-gray-800 border-t border-gray-700 p-4 pb-6 shadow-2xl z-20">
-            <div className="flex items-center justify-between max-w-md mx-auto">
-                <div className="flex flex-col">
-                    <span className="text-pink-400 text-xs font-bold tracking-wider">NOW PLAYING</span>
-                    <span className="font-bold text-lg">{currentStation.name}</span>
-                </div>
-                <button onClick={togglePlay} className="w-14 h-14 rounded-full bg-pink-600 hover:bg-pink-500 flex items-center justify-center shadow-lg shadow-pink-600/30 transition transform active:scale-95">
-                    {isPlaying ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" className="ml-1"/>}
-                </button>
-            </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default App;
+  console.log("App loaded. To open admin: use secret URL ?adminkey=SECRET_TOKEN or click logo 7 times / long-press. Replace SECRET_TOKEN with your own.");
+  </script>
+</body>
+</html>
